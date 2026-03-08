@@ -40,3 +40,32 @@ signal:
   allow_red_cards: false
   min_total_score: 6
 
+risk:
+  initial_bankroll: 100000.0
+  max_drawdown_hard: 0.25
+  daily_loss_limit: 0.05
+  max_consecutive_losses: 6
+  max_trades_per_day: 40
+  max_stake_pct_of_equity: 0.02
+  max_event_exposure_pct: 0.03
+  min_stake_pct_of_equity: 0.001
+
+bankroll:
+  fractional_kelly: 0.35
+  max_fraction_per_bet: 0.02
+  min_fraction_per_bet: 0.001
+  absolute_min_stake: 0.0
+  level_a_multiplier: 1.0
+  level_b_multiplier: 0.75
+  level_c_multiplier: 0.5
+  level_d_multiplier: 0.0
+  target_volatility: 0.015
+  vol_lookback: 50
+  min_vol_samples: 8
+  min_vol_scale: 0.5
+  max_vol_scale: 1.5
+  drawdown_soft_start: 0.1
+  drawdown_soft_end: 0.2
+  drawdown_min_scale: 0.3
+  loss_streak_scale_start: 3
+  loss_streak_penalty: 0.85

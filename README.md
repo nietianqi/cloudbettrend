@@ -9,6 +9,8 @@
 - 统一数据模型（AH / OU / Team Total / 1X2 等）
 - 统一信号评分引擎
 - 硬过滤器（红牌、暂停恢复噪声、盘口跳线、比分条件等）
+- 风控管理（单笔上限、日亏损上限、硬回撤熔断、连亏限制、日交易次数限制）
+- 资金管理（分级 fractional Kelly + 波动目标 + 回撤/连亏动态降杠杆）
 - 简单回测流水线（JSONL/CSV -> 信号 -> 统计 -> 可选 CSV 输出）
 - SQLite 表结构脚本（赛前/滚球/状态/模型/执行/结果字段）
 
@@ -40,7 +42,8 @@ pytest -q
 - `src/cloudbettrend/models.py`: 数据结构
 - `src/cloudbettrend/filters.py`: 统一过滤器
 - `src/cloudbettrend/scoring.py`: 评分引擎
+- `src/cloudbettrend/risk.py`: 风控引擎与资金状态
+- `src/cloudbettrend/bankroll.py`: 仓位建议引擎
 - `src/cloudbettrend/backtest.py`: 回测流程
 - `configs/default.yaml`: 默认参数
 - `sql/schema.sql`: SQLite 表结构
-

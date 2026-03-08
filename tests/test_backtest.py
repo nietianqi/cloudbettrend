@@ -16,5 +16,7 @@ def test_backtest_runner_outputs_expected_counts(tmp_path: Path):
 
     assert report.total_events == 1
     assert report.accepted_signals == 1
+    assert report.executed_trades == 1
+    assert report.blocked_by_risk == 0
+    assert report.ending_bankroll > DEFAULT_CONFIG.risk.initial_bankroll
     assert out.exists()
-

@@ -62,6 +62,40 @@ class SignalConfig:
 
 
 @dataclass(frozen=True)
+class RiskConfig:
+    initial_bankroll: float = 100000.0
+    max_drawdown_hard: float = 0.25
+    daily_loss_limit: float = 0.05
+    max_consecutive_losses: int = 6
+    max_trades_per_day: int = 40
+    max_stake_pct_of_equity: float = 0.02
+    max_event_exposure_pct: float = 0.03
+    min_stake_pct_of_equity: float = 0.001
+
+
+@dataclass(frozen=True)
+class BankrollConfig:
+    fractional_kelly: float = 0.35
+    max_fraction_per_bet: float = 0.02
+    min_fraction_per_bet: float = 0.001
+    absolute_min_stake: float = 0.0
+    level_a_multiplier: float = 1.0
+    level_b_multiplier: float = 0.75
+    level_c_multiplier: float = 0.50
+    level_d_multiplier: float = 0.0
+    target_volatility: float = 0.015
+    vol_lookback: int = 50
+    min_vol_samples: int = 8
+    min_vol_scale: float = 0.50
+    max_vol_scale: float = 1.50
+    drawdown_soft_start: float = 0.10
+    drawdown_soft_end: float = 0.20
+    drawdown_min_scale: float = 0.30
+    loss_streak_scale_start: int = 3
+    loss_streak_penalty: float = 0.85
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     pre_signal: PreSignalConfig = PreSignalConfig()
     reversion: ReversionConfig = ReversionConfig()
@@ -69,6 +103,8 @@ class EngineConfig:
     market_stability: MarketStabilityConfig = MarketStabilityConfig()
     edge: EdgeConfig = EdgeConfig()
     signal: SignalConfig = SignalConfig()
+    risk: RiskConfig = RiskConfig()
+    bankroll: BankrollConfig = BankrollConfig()
 
 
 DEFAULT_CONFIG = EngineConfig()
@@ -96,6 +132,8 @@ def _to_dict(config: EngineConfig) -> dict[str, Any]:
         "market_stability": vars(config.market_stability),
         "edge": vars(config.edge),
         "signal": vars(config.signal),
+        "risk": vars(config.risk),
+        "bankroll": vars(config.bankroll),
     }
 
 
@@ -115,5 +153,6 @@ def load_engine_config(path: str | Path | None) -> EngineConfig:
         market_stability=MarketStabilityConfig(**merged["market_stability"]),
         edge=EdgeConfig(**merged["edge"]),
         signal=SignalConfig(**merged["signal"]),
+        risk=RiskConfig(**merged["risk"]),
+        bankroll=BankrollConfig(**merged["bankroll"]),
     )
-

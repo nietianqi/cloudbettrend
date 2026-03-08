@@ -32,13 +32,19 @@ def main() -> None:
 
         print(f"total_events={report.total_events}")
         print(f"accepted_signals={report.accepted_signals}")
+        print(f"executed_trades={report.executed_trades}")
+        print(f"blocked_by_risk={report.blocked_by_risk}")
         print(f"acceptance_rate={report.acceptance_rate:.2%}")
         print(f"avg_signal_score={report.avg_signal_score:.2f}")
         print(f"avg_edge_after_cost={report.avg_edge_after_cost:.4f}")
+        print(f"avg_stake={report.avg_stake:.2f}")
         print(
             "avg_clv_bps="
             + (f"{report.avg_clv_bps:.2f}" if report.avg_clv_bps is not None else "N/A")
         )
+        print(f"total_pnl={report.total_pnl:.2f}")
+        print(f"ending_bankroll={report.ending_bankroll:.2f}")
+        print(f"max_drawdown={report.max_drawdown:.2%}")
         print(f"level_breakdown={report.level_breakdown}")
         if args.output:
             print(f"output={Path(args.output).resolve()}")
@@ -46,4 +52,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

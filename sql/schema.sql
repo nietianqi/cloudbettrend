@@ -68,12 +68,22 @@ CREATE TABLE IF NOT EXISTS signal_samples (
 
   -- E. 执行字段
   intended_stake REAL,
+  proposed_stake REAL,
   allowed_stake REAL,
+  matched_stake REAL,
+  stake_fraction REAL,
+  full_kelly_fraction REAL,
   placed_odds REAL,
   matched_odds REAL,
   rejected_flag INTEGER,
   slippage_bps REAL,
   execution_delay_ms INTEGER,
+  risk_allowed INTEGER,
+  risk_reason TEXT,
+  risk_stake_cap REAL,
+  bankroll_before REAL,
+  bankroll_after REAL,
+  drawdown_ratio REAL,
 
   -- F. 结果字段
   final_score_home INTEGER,
@@ -90,4 +100,3 @@ CREATE TABLE IF NOT EXISTS signal_samples (
 CREATE INDEX IF NOT EXISTS idx_signal_samples_match ON signal_samples(match_id);
 CREATE INDEX IF NOT EXISTS idx_signal_samples_market ON signal_samples(market_type, minute);
 CREATE INDEX IF NOT EXISTS idx_signal_samples_signal ON signal_samples(signal_label, edge_after_cost);
-
