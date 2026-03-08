@@ -1,0 +1,42 @@
+pre_signal:
+  strong_move_ticks: 2
+  weak_move_ticks: 1
+  consensus_threshold: 0.7
+  close_odds_strength_threshold: 1.90
+  min_pre_score: 3
+
+reversion:
+  strong_reversion_ticks: 2
+  weak_reversion_ticks: 1
+  prime_window_start: 5
+  prime_window_end: 12
+  secondary_window_end: 20
+
+state:
+  min_dangerous_attacks_ratio_fav: 0.40
+  min_shots_diff_fav: -2
+  min_shots_on_target_diff_fav: -1
+  min_corners_diff_fav: -2
+  min_total_shots_for_ou_after_12: 3
+  min_total_dangerous_attacks_for_ou_after_12: 20
+
+market_stability:
+  min_seconds_since_reopen: 15
+  max_line_jumps_last_60s: 2
+  max_odds_jumps_last_60s: 2
+  require_open_status: true
+  min_max_stake: 0.0
+
+edge:
+  min_edge_after_cost: 0.03
+  strong_edge: 0.04
+  medium_edge: 0.02
+  default_cost_bps: 20.0
+
+signal:
+  minute_start: 3
+  minute_end: 25
+  require_neutral_score: true
+  allow_red_cards: false
+  min_total_score: 6
+
