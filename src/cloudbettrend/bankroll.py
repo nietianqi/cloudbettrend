@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 
 from .config import EngineConfig
-from .models import SignalEvaluation, SignalInput
+from .models import MarketType, SignalEvaluation, SignalInput
 from .risk import PortfolioState
 
 
@@ -17,6 +17,9 @@ class BankrollDecision:
     drawdown_scale: float
     level_scale: float
     streak_scale: float
+    market_type_scale: float = 1.0   # per-market-type Kelly adjustment
+    uncertainty_scale: float = 1.0   # discount when fair_odds is engine-estimated
+    clv_feedback_scale: float = 1.0  # CLV-based feedback loop scale
     reason: str | None = None
 
     @classmethod
@@ -29,6 +32,9 @@ class BankrollDecision:
             drawdown_scale=1.0,
             level_scale=0.0,
             streak_scale=1.0,
+            market_type_scale=1.0,
+            uncertainty_scale=1.0,
+            clv_feedback_scale=1.0,
             reason=reason,
         )
 
@@ -38,6 +44,12 @@ class BankrollManager:
         self.config = config
 
     def _full_kelly_fraction(self, fair_odds: float, market_odds: float) -> float:
+        """
+        Standard Kelly criterion for binary-ish outcomes.
+
+        f* = (p * b - (1-p)) / b  =  (p * market_odds - 1) / b
+        where p = 1/fair_odds  and  b = market_odds - 1.
+        """
         if fair_odds <= 1.0 or market_odds <= 1.0:
             return 0.0
         p = 1.0 / fair_odds
@@ -59,7 +71,7 @@ class BankrollManager:
 
     def _volatility_scale(self, state: PortfolioState) -> float:
         cfg = self.config.bankroll
-        values = list(state.rolling_returns)[-cfg.vol_lookback :]
+        values = list(state.rolling_returns)[-cfg.vol_lookback:]
         if len(values) < cfg.min_vol_samples:
             return 1.0
 
@@ -90,7 +102,62 @@ class BankrollManager:
         if losses < cfg.loss_streak_scale_start:
             return 1.0
         extra = losses - cfg.loss_streak_scale_start + 1
-        return cfg.loss_streak_penalty**extra
+        return cfg.loss_streak_penalty ** extra
+
+    def _market_type_scale(self, signal: SignalInput) -> float:
+        """
+        Per-market-type Kelly fraction adjustment.
+
+        AH (Asian Handicap): most reliable edges in this framework → full Kelly scale.
+        TT (Team Total): slightly less model certainty than AH.
+        OU (Over/Under): widest model variance, thinnest edges → most conservative.
+        All other types default to AH scale as a conservative choice.
+        """
+        cfg = self.config.bankroll
+        mt = signal.pre.market_type
+        if mt == MarketType.AH:
+            return cfg.ah_kelly_scale
+        if mt == MarketType.OU:
+            return cfg.ou_kelly_scale
+        if mt == MarketType.TEAM_TOTAL:
+            return cfg.tt_kelly_scale
+        return cfg.ah_kelly_scale
+
+    def _uncertainty_scale(self, signal: SignalInput) -> float:
+        """
+        Discount Kelly when fair_odds had to be estimated from market odds.
+
+        When neither fair_odds nor fair_prob is provided by a model, the scoring
+        engine falls back to shrinkage estimation from live odds. This estimation
+        inflates apparent edge, so we apply a haircut to stay within safe Kelly bounds.
+        """
+        if signal.model.fair_odds is None and signal.model.fair_prob is None:
+            return self.config.bankroll.estimated_odds_uncertainty_scale
+        return 1.0
+
+    def _clv_feedback_scale(self, state: PortfolioState) -> float:
+        """
+        Reduce sizing when recent CLV (closing-line value) is consistently negative.
+
+        Negative CLV means we are consistently buying at prices that deteriorate —
+        a signal that the edge may not be real or that execution is suffering. A
+        linear taper from 1.0 at the threshold to clv_feedback_min_scale at 2× the
+        threshold protects against over-betting in eroding-edge environments.
+        """
+        cfg = self.config.bankroll
+        values = list(state.rolling_clv_bps)[-cfg.clv_feedback_window:]
+        if len(values) < cfg.clv_feedback_window:
+            return 1.0  # insufficient history: no adjustment
+
+        avg_clv = sum(values) / len(values)
+        if avg_clv >= cfg.clv_feedback_threshold:
+            return 1.0
+
+        # Both avg_clv and threshold are negative; compute how far below threshold
+        t = cfg.clv_feedback_threshold  # e.g. -10.0
+        frac = min((avg_clv - t) / t, 1.0)  # → positive ratio, capped at 1.0
+        scale = 1.0 - frac * (1.0 - cfg.clv_feedback_min_scale)
+        return max(scale, cfg.clv_feedback_min_scale)
 
     def propose_stake(
         self,
@@ -116,6 +183,9 @@ class BankrollManager:
         vol_scale = self._volatility_scale(state)
         dd_scale = self._drawdown_scale(state)
         streak_scale = self._streak_scale(state)
+        market_type_scale = self._market_type_scale(signal)
+        uncertainty_scale = self._uncertainty_scale(signal)
+        clv_feedback_scale = self._clv_feedback_scale(state)
 
         stake_fraction = (
             full_kelly
@@ -124,6 +194,9 @@ class BankrollManager:
             * vol_scale
             * dd_scale
             * streak_scale
+            * market_type_scale
+            * uncertainty_scale
+            * clv_feedback_scale
         )
         stake_fraction = min(max(stake_fraction, 0.0), cfg.max_fraction_per_bet)
         if 0 < stake_fraction < cfg.min_fraction_per_bet:
@@ -141,6 +214,8 @@ class BankrollManager:
             drawdown_scale=dd_scale,
             level_scale=level_scale,
             streak_scale=streak_scale,
+            market_type_scale=market_type_scale,
+            uncertainty_scale=uncertainty_scale,
+            clv_feedback_scale=clv_feedback_scale,
             reason=None,
         )
-

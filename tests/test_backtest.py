@@ -18,5 +18,8 @@ def test_backtest_runner_outputs_expected_counts(tmp_path: Path):
     assert report.accepted_signals == 1
     assert report.executed_trades == 1
     assert report.blocked_by_risk == 0
-    assert report.ending_bankroll > DEFAULT_CONFIG.risk.initial_bankroll
+    # No result data in the sample → pnl=0.0 (Fix A2: unknown outcomes no longer
+    # return artificial stake*expected_roi; bankroll is unchanged after unresolved trade)
+    assert report.ending_bankroll == DEFAULT_CONFIG.risk.initial_bankroll
+    assert report.total_pnl == 0.0
     assert out.exists()

@@ -49,6 +49,16 @@ risk:
   max_stake_pct_of_equity: 0.02
   max_event_exposure_pct: 0.03
   min_stake_pct_of_equity: 0.001
+  # Multi-horizon loss limits
+  weekly_loss_limit: 0.10
+  monthly_loss_limit: 0.20
+  # Soft drawdown warning (fires at 15% DD, halves stake cap, hard stop at 25%)
+  soft_drawdown_warning: 0.15
+  soft_drawdown_stake_scale: 0.50
+  # Correlated market protection
+  max_same_match_trades: 1
+  # Level-specific caps (Level C: 1% equity vs default 2%)
+  level_c_max_stake_pct: 0.01
 
 bankroll:
   fractional_kelly: 0.35
@@ -69,3 +79,13 @@ bankroll:
   drawdown_min_scale: 0.3
   loss_streak_scale_start: 3
   loss_streak_penalty: 0.85
+  # Market-type Kelly fractions
+  ah_kelly_scale: 1.0
+  ou_kelly_scale: 0.85
+  tt_kelly_scale: 0.90
+  # Edge uncertainty discount for engine-estimated fair_odds
+  estimated_odds_uncertainty_scale: 0.70
+  # CLV feedback loop
+  clv_feedback_window: 20
+  clv_feedback_min_scale: 0.60
+  clv_feedback_threshold: -10.0

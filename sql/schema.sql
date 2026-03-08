@@ -81,9 +81,19 @@ CREATE TABLE IF NOT EXISTS signal_samples (
   risk_allowed INTEGER,
   risk_reason TEXT,
   risk_stake_cap REAL,
+  risk_level TEXT,               -- signal quality level passed to RiskManager
+  soft_drawdown_active INTEGER,  -- 1 if soft drawdown warning was active at execution
   bankroll_before REAL,
   bankroll_after REAL,
   drawdown_ratio REAL,
+  -- Bankroll scaling factors
+  volatility_scale REAL,
+  drawdown_scale REAL,
+  level_scale REAL,
+  streak_scale REAL,
+  market_type_scale REAL,        -- per-market-type Kelly adjustment
+  uncertainty_scale REAL,        -- fair_odds estimation quality discount
+  clv_feedback_scale REAL,       -- CLV feedback loop scale
 
   -- F. 结果字段
   final_score_home INTEGER,
@@ -94,9 +104,14 @@ CREATE TABLE IF NOT EXISTS signal_samples (
   closing_line_after_3m REAL,
   closing_odds_after_1m REAL,
   closing_odds_after_3m REAL,
-  clv_bps REAL
+  clv_bps REAL,
+
+  -- G. 组合状态字段
+  weekly_pnl REAL,               -- cumulative PnL for current ISO week
+  monthly_pnl REAL               -- cumulative PnL for current calendar month
 );
 
 CREATE INDEX IF NOT EXISTS idx_signal_samples_match ON signal_samples(match_id);
 CREATE INDEX IF NOT EXISTS idx_signal_samples_market ON signal_samples(market_type, minute);
 CREATE INDEX IF NOT EXISTS idx_signal_samples_signal ON signal_samples(signal_label, edge_after_cost);
+CREATE INDEX IF NOT EXISTS idx_signal_samples_week ON signal_samples(kickoff_time, weekly_pnl);
