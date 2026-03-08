@@ -58,6 +58,8 @@ cloudbettrend detect-line-moves ^
   --output out/line_moves.csv
 ```
 
+如需临时包含开赛后盘口变化（用于调试/观察，不是纯赛前研究），加 `--include-live`。
+
 3) 一条命令采集并扫描：
 
 ```bash

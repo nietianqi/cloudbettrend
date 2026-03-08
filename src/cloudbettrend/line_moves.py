@@ -11,7 +11,7 @@ from urllib.parse import parse_qs
 from .cloudbet_feed import CloudbetFeedClient
 
 
-DEFAULT_QUERY_MARKETS = ("soccer.asianHandicap", "soccer.totalGoals")
+DEFAULT_QUERY_MARKETS = ("soccer.asian_handicap", "soccer.total_goals")
 SUPPORTED_MARKETS = {
     "soccer.asian_handicap": {"canonical_outcome": "home", "tick_size": 0.25},
     "soccer.total_goals": {"canonical_outcome": "over", "tick_size": 0.25},
@@ -245,9 +245,19 @@ def collect_competition_snapshot(
             canonical_outcome = settings["canonical_outcome"]
             submarkets = market_data.get("submarkets", {}) or {}
             for submarket_key, submarket_data in submarkets.items():
-                selections = submarket_data.get("selections", {}) or {}
-                for outcome, selection in selections.items():
-                    outcome_name = str(outcome)
+                selections_raw = submarket_data.get("selections", []) or []
+                selections: list[dict[str, Any]] = []
+                if isinstance(selections_raw, dict):
+                    for outcome_key, selection_value in selections_raw.items():
+                        if isinstance(selection_value, dict):
+                            selection_copy = dict(selection_value)
+                            selection_copy.setdefault("outcome", outcome_key)
+                            selections.append(selection_copy)
+                elif isinstance(selections_raw, list):
+                    selections = [s for s in selections_raw if isinstance(s, dict)]
+
+                for selection in selections:
+                    outcome_name = str(selection.get("outcome") or "")
                     if outcome_name != canonical_outcome:
                         continue
 
@@ -296,12 +306,24 @@ def _main_line_per_snapshot(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
     for row in rows:
         by_time.setdefault(str(row["snapshot_time"]), []).append(row)
 
+    def _price_score(row: sqlite3.Row) -> float:
+        price = _parse_float(row["price"])
+        if price is None or price <= 0:
+            return 9999.0
+        # Cloudbet feeds can represent price in different conventions. Anchor around
+        # 2.0 (decimal) or 1.0 (HK-like) depending on range.
+        anchor = 1.0 if price <= 1.2 else 2.0
+        return abs(price - anchor)
+
     selected: list[sqlite3.Row] = []
     for _, candidates in sorted(by_time.items(), key=lambda item: item[0]):
-        best = min(
-            candidates,
-            key=lambda r: abs((r["price"] if r["price"] is not None else 99.0) - 2.0),
-        )
+        trading = [
+            r
+            for r in candidates
+            if str(r["selection_status"] or "").upper() == "TRADING"
+        ]
+        pool = trading or candidates
+        best = min(pool, key=_price_score)
         selected.append(best)
     return selected
 
@@ -311,6 +333,7 @@ def detect_line_moves(
     store: SnapshotStore,
     lookback_hours: int = 48,
     min_ticks: float = 2.0,
+    prematch_only: bool = True,
 ) -> list[LineMoveCandidate]:
     since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     rows = store.fetch_prematch_rows(since_iso=since.replace(microsecond=0).isoformat())
@@ -321,7 +344,7 @@ def detect_line_moves(
         snapshot_dt = _parse_iso_utc(row["snapshot_time"])
         if start_dt is None or snapshot_dt is None:
             continue
-        if snapshot_dt > start_dt:
+        if prematch_only and snapshot_dt > start_dt:
             continue
         grouped.setdefault((int(row["event_id"]), str(row["market_key"])), []).append(row)
 

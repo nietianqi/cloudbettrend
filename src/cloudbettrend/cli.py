@@ -36,6 +36,16 @@ def _resolve_competitions(
     payload = client.get_sport_competitions(sport_key=sport_key)
     competitions = payload.get("competitions", []) or []
     keys = [str(c.get("key")) for c in competitions if c.get("key")]
+
+    # Some sport responses (e.g. soccer) return competitions nested under categories.
+    if not keys:
+        categories = payload.get("categories", []) or []
+        for category in categories:
+            for comp in (category.get("competitions", []) or []):
+                key = comp.get("key")
+                if key:
+                    keys.append(str(key))
+
     if max_competitions is not None and max_competitions > 0:
         return keys[:max_competitions]
     return keys
@@ -128,6 +138,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Max rows printed to terminal.",
     )
+    detect.add_argument(
+        "--include-live",
+        action="store_true",
+        help="Include post-kickoff snapshots (default only pre-match snapshots).",
+    )
 
     scan = subparsers.add_parser(
         "cloudbet-scan",
@@ -192,6 +207,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="Max rows printed to terminal.",
+    )
+    scan.add_argument(
+        "--include-live",
+        action="store_true",
+        help="Include post-kickoff snapshots (default only pre-match snapshots).",
     )
 
     return parser
@@ -268,6 +288,7 @@ def main() -> None:
             store=store,
             lookback_hours=args.lookback_hours,
             min_ticks=args.min_ticks,
+            prematch_only=not args.include_live,
         )
         if args.output:
             write_line_move_candidates(args.output, candidates)
@@ -315,6 +336,7 @@ def main() -> None:
             store=store,
             lookback_hours=args.lookback_hours,
             min_ticks=args.min_ticks,
+            prematch_only=not args.include_live,
         )
         if args.output:
             write_line_move_candidates(args.output, candidates)
