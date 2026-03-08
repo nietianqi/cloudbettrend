@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import EngineConfig
 from .filters import HardFilter
@@ -27,7 +27,8 @@ def _safe_odds(odds: float | None, fallback: float) -> float:
 @dataclass
 class PreMatchOverReversionEngine:
     config: EngineConfig
-    hard_filter: HardFilter = HardFilter()
+    # FIX A1: use field(default_factory=...) to avoid shared mutable default across instances
+    hard_filter: HardFilter = field(default_factory=HardFilter)
 
     def build_pre_signal_score(self, signal: SignalInput, line_move_ticks: int) -> int:
         score = 0
@@ -129,7 +130,9 @@ class PreMatchOverReversionEngine:
         if model.fair_prob is not None and model.fair_prob > 0:
             return 1.0 / model.fair_prob
 
-        # No explicit model input: use market odds as base and apply tiny shrinkage by state quality.
+        # No explicit model input: estimate from market odds with small scoring adjustment.
+        # This is a lower-confidence estimate; BankrollManager applies an uncertainty
+        # discount (estimated_odds_uncertainty_scale) when this path is taken.
         adjustment = 1.0 + min((pre_score + state_score) * 0.005, 0.03)
         return signal.live.live_back_odds / adjustment
 
@@ -227,4 +230,3 @@ class PreMatchOverReversionEngine:
             fair_odds=fair_odds,
             market_stable=True,
         )
-

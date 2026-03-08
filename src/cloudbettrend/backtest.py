@@ -10,6 +10,7 @@ from typing import Any, Iterable
 from .bankroll import BankrollDecision, BankrollManager
 from .config import EngineConfig
 from .models import (
+    ExecutionSnapshot,
     LiveMarketSnapshot,
     MarketType,
     MatchStateSnapshot,
@@ -79,6 +80,7 @@ def _build_signal(row: dict[str, Any]) -> SignalInput:
     live = row.get("live", {})
     state = row.get("state", {})
     model = row.get("model", {})
+    execution = row.get("execution", {})
     result = row.get("result", {})
 
     pre_snapshot = PreMatchSnapshot(
@@ -270,6 +272,43 @@ def _build_signal(row: dict[str, Any]) -> SignalInput:
         ),
     )
 
+    # FIX A7: Parse ExecutionSnapshot (previously silently ignored)
+    execution_snapshot = ExecutionSnapshot(
+        intended_stake=(
+            _to_float(execution["intended_stake"])
+            if execution.get("intended_stake") is not None
+            else None
+        ),
+        allowed_stake=(
+            _to_float(execution["allowed_stake"])
+            if execution.get("allowed_stake") is not None
+            else None
+        ),
+        placed_odds=(
+            _to_float(execution["placed_odds"])
+            if execution.get("placed_odds") is not None
+            else None
+        ),
+        matched_odds=(
+            _to_float(execution["matched_odds"])
+            if execution.get("matched_odds") is not None
+            else None
+        ),
+        rejected_flag=_to_bool(
+            execution.get("rejected_flag"), default=False
+        ),
+        slippage_bps=(
+            _to_float(execution["slippage_bps"])
+            if execution.get("slippage_bps") is not None
+            else None
+        ),
+        execution_delay_ms=(
+            _to_int(execution["execution_delay_ms"])
+            if execution.get("execution_delay_ms") is not None
+            else None
+        ),
+    )
+
     result_snapshot = ResultSnapshot(
         final_score_home=(
             _to_int(result["final_score_home"])
@@ -323,6 +362,7 @@ def _build_signal(row: dict[str, Any]) -> SignalInput:
         live=live_snapshot,
         state=state_snapshot,
         model=model_snapshot,
+        execution=execution_snapshot,
         result=result_snapshot,
         favorite_side=str(row.get("favorite_side", "home")),
         direction=_to_int(row.get("direction"), default=1),
@@ -345,7 +385,15 @@ def _extract_day_key(value: str) -> str:
         return value[:10] if len(value) >= 10 else "UNKNOWN"
 
 
-def _resolve_trade_pnl(signal: SignalInput, stake: float, expected_roi: float) -> float:
+def _resolve_trade_pnl(signal: SignalInput, stake: float) -> float:
+    """
+    Resolve PnL for a trade.
+
+    Priority:
+    1. Explicit pnl from result snapshot.
+    2. Outcome string (win/loss/push/void).
+    3. Unknown: return 0.0 — avoids inflating backtest PnL with assumed edge.
+    """
     outcome = (signal.result.outcome_winlosepush or "").strip().lower()
     if signal.result.pnl is not None:
         return signal.result.pnl
@@ -355,7 +403,8 @@ def _resolve_trade_pnl(signal: SignalInput, stake: float, expected_roi: float) -
         return -stake
     if outcome in {"push", "void"}:
         return 0.0
-    return stake * expected_roi
+    # FIX A2: return 0.0 for unknown outcomes instead of stake * expected_roi
+    return 0.0
 
 
 @dataclass(frozen=True)
@@ -403,10 +452,18 @@ class BacktestRunner:
 
             bankroll_decision = BankrollDecision.empty("signal_not_accepted")
             risk_decision = RiskDecision.denied("signal_not_accepted")
-            executed = False
+            is_executed = False
             matched_stake = 0.0
             realized_pnl = 0.0
             trade_return = 0.0
+
+            # Compute CLV early so it can be passed to record_trade for feedback loop
+            clv_bps = signal.result.clv_bps
+            if clv_bps is None:
+                clv_bps = _compute_clv_bps(
+                    live_odds=signal.live.live_back_odds,
+                    close_odds=signal.result.closing_odds_after_1m,
+                )
 
             if evaluation.accepted:
                 bankroll_decision = self.bankroll_manager.propose_stake(
@@ -418,13 +475,13 @@ class BacktestRunner:
                     signal=signal,
                     state=self.state,
                     proposed_stake=bankroll_decision.stake,
+                    level=evaluation.level,  # level-specific stake cap
                 )
                 if risk_decision.allowed:
                     matched_stake = risk_decision.stake_after_limits
                     realized_pnl = _resolve_trade_pnl(
                         signal=signal,
                         stake=matched_stake,
-                        expected_roi=evaluation.edge_after_cost,
                     )
                     trade_return = (
                         (realized_pnl / matched_stake) if matched_stake > 1e-9 else 0.0
@@ -432,17 +489,12 @@ class BacktestRunner:
                     self.state.record_trade(
                         pnl=realized_pnl,
                         equity_before=bankroll_before,
+                        match_id=signal.pre.match_id,
+                        clv_bps=clv_bps,
                     )
-                    executed = True
+                    is_executed = True
                 else:
                     self.state.record_blocked()
-
-            clv_bps = signal.result.clv_bps
-            if clv_bps is None:
-                clv_bps = _compute_clv_bps(
-                    live_odds=signal.live.live_back_odds,
-                    close_odds=signal.result.closing_odds_after_1m,
-                )
 
             outputs.append(
                 {
@@ -473,45 +525,50 @@ class BacktestRunner:
                     "drawdown_scale": bankroll_decision.drawdown_scale,
                     "level_scale": bankroll_decision.level_scale,
                     "streak_scale": bankroll_decision.streak_scale,
+                    "market_type_scale": bankroll_decision.market_type_scale,
+                    "uncertainty_scale": bankroll_decision.uncertainty_scale,
+                    "clv_feedback_scale": bankroll_decision.clv_feedback_scale,
                     "risk_allowed": risk_decision.allowed,
                     "risk_reason": risk_decision.reason,
                     "risk_stake_cap": risk_decision.stake_cap,
-                    "executed": executed,
+                    "executed": is_executed,
                     "realized_pnl": realized_pnl,
                     "trade_return": trade_return,
                     "bankroll_before": bankroll_before,
                     "bankroll_after": self.state.equity,
                     "drawdown_ratio": self.state.drawdown_ratio,
+                    "weekly_pnl": self.state.weekly_pnl,
+                    "monthly_pnl": self.state.monthly_pnl,
                     "clv_bps": clv_bps,
                 }
             )
 
-        accepted = [r for r in outputs if r["accepted"]]
-        executed = [r for r in outputs if r["executed"]]
-        blocked = [r for r in outputs if r["accepted"] and not r["risk_allowed"]]
+        accepted_rows = [r for r in outputs if r["accepted"]]
+        executed_rows = [r for r in outputs if r["executed"]]
+        blocked_rows = [r for r in outputs if r["accepted"] and not r["risk_allowed"]]
         avg_score = (
             sum(r["signal_score"] for r in outputs) / len(outputs) if outputs else 0.0
         )
         avg_edge = (
-            sum(r["edge_after_cost"] for r in accepted) / len(accepted)
-            if accepted
+            sum(r["edge_after_cost"] for r in accepted_rows) / len(accepted_rows)
+            if accepted_rows
             else 0.0
         )
         avg_stake = (
-            sum(r["matched_stake"] for r in executed) / len(executed)
-            if executed
+            sum(r["matched_stake"] for r in executed_rows) / len(executed_rows)
+            if executed_rows
             else 0.0
         )
-        clv_values = [r["clv_bps"] for r in accepted if r["clv_bps"] is not None]
+        clv_values = [r["clv_bps"] for r in accepted_rows if r["clv_bps"] is not None]
         avg_clv = (sum(clv_values) / len(clv_values)) if clv_values else None
-        total_pnl = sum(r["realized_pnl"] for r in executed)
+        total_pnl = sum(r["realized_pnl"] for r in executed_rows)
 
         report = BacktestReport(
             total_events=len(outputs),
-            accepted_signals=len(accepted),
-            executed_trades=len(executed),
-            blocked_by_risk=len(blocked),
-            acceptance_rate=(len(accepted) / len(outputs)) if outputs else 0.0,
+            accepted_signals=len(accepted_rows),
+            executed_trades=len(executed_rows),
+            blocked_by_risk=len(blocked_rows),
+            acceptance_rate=(len(accepted_rows) / len(outputs)) if outputs else 0.0,
             avg_signal_score=avg_score,
             avg_edge_after_cost=avg_edge,
             avg_stake=avg_stake,
