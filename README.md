@@ -37,7 +37,37 @@ cloudbettrend backtest \
 pytest -q
 ```
 
-## 4. 目录说明
+## 4. Cloudbet 盘口变动扫描
+
+1) 先采集盘口快照（建议每 30-60 秒跑一次定时任务）：
+
+```bash
+set CLOUDBET_API_KEY=your_api_key
+cloudbettrend collect-cloudbet ^
+  --competition soccer-england-premier-league ^
+  --db data/cloudbet_lines.db
+```
+
+2) 检测赛前升/降两个盘口（默认 2 ticks = 0.5）：
+
+```bash
+cloudbettrend detect-line-moves ^
+  --db data/cloudbet_lines.db ^
+  --min-ticks 2 ^
+  --lookback-hours 48 ^
+  --output out/line_moves.csv
+```
+
+3) 一条命令采集并扫描：
+
+```bash
+cloudbettrend cloudbet-scan ^
+  --competition soccer-england-premier-league ^
+  --db data/cloudbet_lines.db ^
+  --min-ticks 2
+```
+
+## 5. 目录说明
 
 - `src/cloudbettrend/models.py`: 数据结构
 - `src/cloudbettrend/filters.py`: 统一过滤器
@@ -45,5 +75,7 @@ pytest -q
 - `src/cloudbettrend/risk.py`: 风控引擎与资金状态
 - `src/cloudbettrend/bankroll.py`: 仓位建议引擎
 - `src/cloudbettrend/backtest.py`: 回测流程
+- `src/cloudbettrend/cloudbet_feed.py`: Cloudbet API 接口封装
+- `src/cloudbettrend/line_moves.py`: 赛前盘口快照与两档变动检测
 - `configs/default.yaml`: 默认参数
 - `sql/schema.sql`: SQLite 表结构
