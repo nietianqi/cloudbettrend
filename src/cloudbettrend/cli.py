@@ -11,7 +11,9 @@ from .line_moves import (
     SnapshotStore,
     collect_competition_snapshot,
     detect_line_moves,
+    detect_over_reversion_signals,
     write_line_move_candidates,
+    write_over_reversion_signals,
 )
 
 
@@ -144,6 +146,57 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include post-kickoff snapshots (default only pre-match snapshots).",
     )
 
+    detect_reversion = subparsers.add_parser(
+        "detect-overreversion",
+        help="Detect pre-match >=2 tick move then early live reversion-to-open signals.",
+    )
+    detect_reversion.add_argument(
+        "--db",
+        default="data/cloudbet_lines.db",
+        help="SQLite DB path containing snapshots.",
+    )
+    detect_reversion.add_argument(
+        "--lookback-hours",
+        type=int,
+        default=96,
+        help="Scan snapshots in this lookback window.",
+    )
+    detect_reversion.add_argument(
+        "--min-pre-move-ticks",
+        type=float,
+        default=2.0,
+        help="Minimum pre-match move ticks from open to close.",
+    )
+    detect_reversion.add_argument(
+        "--min-reversion-ticks",
+        type=float,
+        default=1.0,
+        help="Minimum live reversion ticks from close to live.",
+    )
+    detect_reversion.add_argument(
+        "--max-live-minutes",
+        type=int,
+        default=25,
+        help="Only consider live snapshots within this minute from kickoff.",
+    )
+    detect_reversion.add_argument(
+        "--tolerance-ticks",
+        type=float,
+        default=0.0,
+        help="Allow near-open trigger tolerance in ticks.",
+    )
+    detect_reversion.add_argument(
+        "--output",
+        default=None,
+        help="Optional CSV output for over-reversion signals.",
+    )
+    detect_reversion.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max rows printed to terminal.",
+    )
+
     scan = subparsers.add_parser(
         "cloudbet-scan",
         help="Collect latest Cloudbet snapshot then detect >= N tick line moves.",
@@ -212,6 +265,89 @@ def _build_parser() -> argparse.ArgumentParser:
         "--include-live",
         action="store_true",
         help="Include post-kickoff snapshots (default only pre-match snapshots).",
+    )
+
+    scan_reversion = subparsers.add_parser(
+        "cloudbet-overreversion-scan",
+        help="Collect latest Cloudbet snapshots then detect over-reversion trade signals.",
+    )
+    scan_reversion.add_argument(
+        "--db",
+        default="data/cloudbet_lines.db",
+        help="SQLite DB path for snapshots and detection.",
+    )
+    scan_reversion.add_argument(
+        "--competition",
+        action="append",
+        default=[],
+        help="Competition key. Use multiple --competition to pass multiple keys.",
+    )
+    scan_reversion.add_argument(
+        "--sport",
+        default="soccer",
+        help="Sport key used when --competition is not provided.",
+    )
+    scan_reversion.add_argument(
+        "--max-competitions",
+        type=int,
+        default=0,
+        help="Limit competitions when auto-loading by sport. 0 means all.",
+    )
+    scan_reversion.add_argument(
+        "--markets",
+        default=",".join(DEFAULT_QUERY_MARKETS),
+        help="Cloudbet markets query (comma separated).",
+    )
+    scan_reversion.add_argument(
+        "--api-key-env",
+        default="CLOUDBET_API_KEY",
+        help="Environment variable name holding Cloudbet API key.",
+    )
+    scan_reversion.add_argument(
+        "--base-url",
+        default="https://sports-api.cloudbet.com",
+        help="Cloudbet sports API base URL.",
+    )
+    scan_reversion.add_argument(
+        "--lookback-hours",
+        type=int,
+        default=96,
+        help="Scan snapshots in this lookback window.",
+    )
+    scan_reversion.add_argument(
+        "--min-pre-move-ticks",
+        type=float,
+        default=2.0,
+        help="Minimum pre-match move ticks from open to close.",
+    )
+    scan_reversion.add_argument(
+        "--min-reversion-ticks",
+        type=float,
+        default=1.0,
+        help="Minimum live reversion ticks from close to live.",
+    )
+    scan_reversion.add_argument(
+        "--max-live-minutes",
+        type=int,
+        default=25,
+        help="Only consider live snapshots within this minute from kickoff.",
+    )
+    scan_reversion.add_argument(
+        "--tolerance-ticks",
+        type=float,
+        default=0.0,
+        help="Allow near-open trigger tolerance in ticks.",
+    )
+    scan_reversion.add_argument(
+        "--output",
+        default=None,
+        help="Optional CSV output for over-reversion signals.",
+    )
+    scan_reversion.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max rows printed to terminal.",
     )
 
     return parser
@@ -300,6 +436,28 @@ def main() -> None:
             )
         if args.output:
             print(f"output={Path(args.output).resolve()}")
+    elif args.command == "detect-overreversion":
+        store = SnapshotStore(args.db)
+        signals = detect_over_reversion_signals(
+            store=store,
+            lookback_hours=args.lookback_hours,
+            min_pre_move_ticks=args.min_pre_move_ticks,
+            min_reversion_ticks=args.min_reversion_ticks,
+            max_live_minutes=args.max_live_minutes,
+            tolerance_ticks=args.tolerance_ticks,
+        )
+        if args.output:
+            write_over_reversion_signals(args.output, signals)
+        print(f"detected_signals={len(signals)}")
+        for item in signals[: args.limit]:
+            print(
+                f"{item.event_start_time} | {item.event_name} | {item.market_key} | "
+                f"open={item.open_line} close={item.close_line} live={item.live_line} | "
+                f"pre_ticks={item.pre_move_ticks:.2f} revert_ticks={item.reversion_ticks:.2f} | "
+                f"bet={item.bet_side} | {item.signal_label}"
+            )
+        if args.output:
+            print(f"output={Path(args.output).resolve()}")
     elif args.command == "cloudbet-scan":
         try:
             client = _build_cloudbet_client(
@@ -349,6 +507,62 @@ def main() -> None:
             print(
                 f"{item.event_start_time} | {item.event_name} | {item.market_key} | "
                 f"{item.open_line}->{item.close_line} | ticks={item.ticks_moved:.2f} | {item.interpretation}"
+            )
+        if args.output:
+            print(f"output={Path(args.output).resolve()}")
+    elif args.command == "cloudbet-overreversion-scan":
+        try:
+            client = _build_cloudbet_client(
+                api_key_env=args.api_key_env,
+                base_url=args.base_url,
+            )
+        except CloudbetAPIError as exc:
+            raise SystemExit(str(exc))
+
+        competitions = _resolve_competitions(
+            client=client,
+            explicit_competitions=args.competition,
+            sport_key=args.sport,
+            max_competitions=(args.max_competitions if args.max_competitions > 0 else None),
+        )
+        if not competitions:
+            raise SystemExit("No competitions to collect.")
+
+        store = SnapshotStore(args.db)
+        markets = tuple(_split_csv(args.markets))
+        total_events = 0
+        total_snapshots = 0
+        for key in competitions:
+            stats = collect_competition_snapshot(
+                client=client,
+                store=store,
+                competition_key=key,
+                markets=markets,
+            )
+            total_events += stats["event_count"]
+            total_snapshots += stats["snapshot_count"]
+
+        signals = detect_over_reversion_signals(
+            store=store,
+            lookback_hours=args.lookback_hours,
+            min_pre_move_ticks=args.min_pre_move_ticks,
+            min_reversion_ticks=args.min_reversion_ticks,
+            max_live_minutes=args.max_live_minutes,
+            tolerance_ticks=args.tolerance_ticks,
+        )
+        if args.output:
+            write_over_reversion_signals(args.output, signals)
+
+        print(f"collected_competitions={len(competitions)}")
+        print(f"collected_events={total_events}")
+        print(f"collected_snapshots={total_snapshots}")
+        print(f"detected_signals={len(signals)}")
+        for item in signals[: args.limit]:
+            print(
+                f"{item.event_start_time} | {item.event_name} | {item.market_key} | "
+                f"open={item.open_line} close={item.close_line} live={item.live_line} | "
+                f"pre_ticks={item.pre_move_ticks:.2f} revert_ticks={item.reversion_ticks:.2f} | "
+                f"bet={item.bet_side} | {item.signal_label}"
             )
         if args.output:
             print(f"output={Path(args.output).resolve()}")

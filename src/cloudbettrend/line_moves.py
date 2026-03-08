@@ -108,6 +108,30 @@ class LineMoveCandidate:
     interpretation: str
 
 
+@dataclass(frozen=True)
+class OverReversionSignal:
+    competition_key: str
+    event_id: int
+    event_name: str
+    event_start_time: str
+    market_key: str
+    open_snapshot_time: str
+    close_snapshot_time: str
+    live_snapshot_time: str
+    minutes_after_kickoff: float
+    open_line: float
+    close_line: float
+    live_line: float
+    open_price: float | None
+    close_price: float | None
+    live_price: float | None
+    pre_move_ticks: float
+    reversion_ticks: float
+    bet_side: str
+    signal_label: str
+    note: str
+
+
 class SnapshotStore:
     def __init__(self, db_path: str | Path):
         path = Path(db_path)
@@ -209,6 +233,22 @@ def _event_name(event: dict[str, Any]) -> str:
     if home and away:
         return f"{home} vs {away}"
     return str(event.get("id", "unknown_event"))
+
+
+def _selection_is_active(row: sqlite3.Row) -> bool:
+    status = str(row["selection_status"] or "").upper()
+    price = _parse_float(row["price"]) or 0.0
+    return status in {"TRADING", "SELECTION_ENABLED", "ENABLED"} and price > 0
+
+
+def _line_to_ticks(line: float, tick_size: float) -> float:
+    if tick_size <= 0:
+        return 0.0
+    return line / tick_size
+
+
+def _approx_equal(left: float, right: float, tolerance_ticks: float, tick_size: float) -> bool:
+    return abs(left - right) <= abs(tolerance_ticks * tick_size) + 1e-9
 
 
 def collect_competition_snapshot(
@@ -317,12 +357,8 @@ def _main_line_per_snapshot(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
 
     selected: list[sqlite3.Row] = []
     for _, candidates in sorted(by_time.items(), key=lambda item: item[0]):
-        trading = [
-            r
-            for r in candidates
-            if str(r["selection_status"] or "").upper() == "TRADING"
-        ]
-        pool = trading or candidates
+        active = [r for r in candidates if _selection_is_active(r)]
+        pool = active or candidates
         best = min(pool, key=_price_score)
         selected.append(best)
     return selected
@@ -404,6 +440,152 @@ def detect_line_moves(
     return candidates
 
 
+def detect_over_reversion_signals(
+    *,
+    store: SnapshotStore,
+    lookback_hours: int = 96,
+    min_pre_move_ticks: float = 2.0,
+    min_reversion_ticks: float = 1.0,
+    max_live_minutes: int = 25,
+    tolerance_ticks: float = 0.0,
+) -> list[OverReversionSignal]:
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    rows = store.fetch_prematch_rows(since_iso=since.replace(microsecond=0).isoformat())
+
+    grouped: dict[tuple[int, str], list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault((int(row["event_id"]), str(row["market_key"])), []).append(row)
+
+    signals: list[OverReversionSignal] = []
+    for (_, market_key), series in grouped.items():
+        settings = SUPPORTED_MARKETS.get(market_key)
+        if settings is None:
+            continue
+        tick_size = float(settings["tick_size"])
+
+        timeline = _main_line_per_snapshot(series)
+        if len(timeline) < 3:
+            continue
+
+        kickoff_dt = _parse_iso_utc(timeline[0]["event_start_time"])
+        if kickoff_dt is None:
+            continue
+
+        pre_rows = []
+        live_rows = []
+        for row in timeline:
+            snap_dt = _parse_iso_utc(row["snapshot_time"])
+            if snap_dt is None:
+                continue
+            if snap_dt <= kickoff_dt:
+                pre_rows.append((snap_dt, row))
+            else:
+                delta_min = (snap_dt - kickoff_dt).total_seconds() / 60.0
+                if delta_min <= max_live_minutes:
+                    live_rows.append((snap_dt, row, delta_min))
+
+        if len(pre_rows) < 2 or not live_rows:
+            continue
+
+        open_row = pre_rows[0][1]
+        close_row = pre_rows[-1][1]
+        open_line = float(open_row["line_value"])
+        close_line = float(close_row["line_value"])
+        pre_move_ticks = abs(_line_to_ticks(close_line - open_line, tick_size))
+        if pre_move_ticks + 1e-9 < min_pre_move_ticks:
+            continue
+
+        pre_delta = close_line - open_line
+        if abs(pre_delta) <= 1e-9:
+            continue
+
+        triggered: OverReversionSignal | None = None
+        for snap_dt, live_row, minutes_after_kickoff in live_rows:
+            live_line = float(live_row["line_value"])
+
+            bet_side = ""
+            signal_label = ""
+            note = ""
+
+            if market_key == "soccer.total_goals":
+                if pre_delta > 0:
+                    # 2.5 -> 3.0 then live back to 2.5: bet Over
+                    cond = (live_line < open_line) or _approx_equal(
+                        live_line, open_line, tolerance_ticks, tick_size
+                    )
+                    if cond:
+                        bet_side = "over"
+                        signal_label = "OU_PRE_UP_LIVE_REVERT_OVER"
+                        note = "pre_total_up_then_live_back_to_open_or_lower"
+                else:
+                    # 3.0 -> 2.5 then live back to 3.0: bet Under
+                    cond = (live_line > open_line) or _approx_equal(
+                        live_line, open_line, tolerance_ticks, tick_size
+                    )
+                    if cond:
+                        bet_side = "under"
+                        signal_label = "OU_PRE_DOWN_LIVE_REVERT_UNDER"
+                        note = "pre_total_down_then_live_back_to_open_or_higher"
+            elif market_key == "soccer.asian_handicap":
+                if pre_delta < 0:
+                    # home -0.75 -> -1.25 then live back to -0.75: bet home
+                    cond = (live_line > open_line) or _approx_equal(
+                        live_line, open_line, tolerance_ticks, tick_size
+                    )
+                    if cond:
+                        bet_side = "home"
+                        signal_label = "AH_HOME_PRE_UP_LIVE_REVERT_HOME"
+                        note = "home_strength_up_pre_then_reverted_to_open"
+                else:
+                    # home -1.25 -> -0.75 then live back to -1.25: bet away
+                    cond = (live_line < open_line) or _approx_equal(
+                        live_line, open_line, tolerance_ticks, tick_size
+                    )
+                    if cond:
+                        bet_side = "away"
+                        signal_label = "AH_HOME_PRE_DOWN_LIVE_REVERT_AWAY"
+                        note = "home_strength_down_pre_then_reverted_to_open"
+            else:
+                continue
+
+            if not bet_side:
+                continue
+
+            reversion_ticks = abs(_line_to_ticks(live_line - close_line, tick_size))
+            if reversion_ticks + 1e-9 < min_reversion_ticks:
+                continue
+
+            triggered = OverReversionSignal(
+                competition_key=str(live_row["competition_key"]),
+                event_id=int(live_row["event_id"]),
+                event_name=str(live_row["event_name"]),
+                event_start_time=str(live_row["event_start_time"]),
+                market_key=market_key,
+                open_snapshot_time=str(open_row["snapshot_time"]),
+                close_snapshot_time=str(close_row["snapshot_time"]),
+                live_snapshot_time=str(live_row["snapshot_time"]),
+                minutes_after_kickoff=minutes_after_kickoff,
+                open_line=open_line,
+                close_line=close_line,
+                live_line=live_line,
+                open_price=_parse_float(open_row["price"]),
+                close_price=_parse_float(close_row["price"]),
+                live_price=_parse_float(live_row["price"]),
+                pre_move_ticks=pre_move_ticks,
+                reversion_ticks=reversion_ticks,
+                bet_side=bet_side,
+                signal_label=signal_label,
+                note=note,
+            )
+            break
+
+        if triggered is not None:
+            signals.append(triggered)
+
+    signals.sort(key=lambda s: (s.event_start_time, s.minutes_after_kickoff))
+    return signals
+
+
 def write_line_move_candidates(path: str | Path, candidates: list[LineMoveCandidate]) -> None:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -445,5 +627,62 @@ def write_line_move_candidates(path: str | Path, candidates: list[LineMoveCandid
                     "ticks_moved": c.ticks_moved,
                     "direction": c.direction,
                     "interpretation": c.interpretation,
+                }
+            )
+
+
+def write_over_reversion_signals(
+    path: str | Path, signals: list[OverReversionSignal]
+) -> None:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        fieldnames = [
+            "competition_key",
+            "event_id",
+            "event_name",
+            "event_start_time",
+            "market_key",
+            "open_snapshot_time",
+            "close_snapshot_time",
+            "live_snapshot_time",
+            "minutes_after_kickoff",
+            "open_line",
+            "close_line",
+            "live_line",
+            "open_price",
+            "close_price",
+            "live_price",
+            "pre_move_ticks",
+            "reversion_ticks",
+            "bet_side",
+            "signal_label",
+            "note",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for s in signals:
+            writer.writerow(
+                {
+                    "competition_key": s.competition_key,
+                    "event_id": s.event_id,
+                    "event_name": s.event_name,
+                    "event_start_time": s.event_start_time,
+                    "market_key": s.market_key,
+                    "open_snapshot_time": s.open_snapshot_time,
+                    "close_snapshot_time": s.close_snapshot_time,
+                    "live_snapshot_time": s.live_snapshot_time,
+                    "minutes_after_kickoff": s.minutes_after_kickoff,
+                    "open_line": s.open_line,
+                    "close_line": s.close_line,
+                    "live_line": s.live_line,
+                    "open_price": s.open_price,
+                    "close_price": s.close_price,
+                    "live_price": s.live_price,
+                    "pre_move_ticks": s.pre_move_ticks,
+                    "reversion_ticks": s.reversion_ticks,
+                    "bet_side": s.bet_side,
+                    "signal_label": s.signal_label,
+                    "note": s.note,
                 }
             )

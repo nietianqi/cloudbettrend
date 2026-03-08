@@ -81,3 +81,25 @@ cloudbettrend cloudbet-scan ^
 - `src/cloudbettrend/line_moves.py`: 赛前盘口快照与两档变动检测
 - `configs/default.yaml`: 默认参数
 - `sql/schema.sql`: SQLite 表结构
+
+## 6. Over-Reversion 信号
+
+检测逻辑：
+
+- 赛前从 open 到 close 移动 >= 2 ticks
+- 开赛后早段（默认 25 分钟内）盘口回到 open 附近
+- 输出建议方向：
+  - `soccer.total_goals`: pre 上升后回落到 open/更低 -> `bet_side=over`
+  - `soccer.asian_handicap`: 主队让球 pre 加深后回到 open/更浅 -> `bet_side=home`
+
+命令：
+
+```bash
+cloudbettrend detect-overreversion \
+  --db data/cloudbet_lines.db \
+  --lookback-hours 96 \
+  --min-pre-move-ticks 2 \
+  --min-reversion-ticks 1 \
+  --max-live-minutes 25 \
+  --output out/over_reversion_signals.csv
+```

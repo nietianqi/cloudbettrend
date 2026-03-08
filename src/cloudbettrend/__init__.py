@@ -5,11 +5,14 @@ from .config import EngineConfig, load_engine_config
 from .line_moves import (
     DEFAULT_QUERY_MARKETS,
     LineMoveCandidate,
+    OverReversionSignal,
     SnapshotRecord,
     SnapshotStore,
     collect_competition_snapshot,
     detect_line_moves,
+    detect_over_reversion_signals,
     write_line_move_candidates,
+    write_over_reversion_signals,
 )
 from .models import (
     ExecutionSnapshot,
@@ -40,6 +43,7 @@ __all__ = [
     "MarketType",
     "MatchStateSnapshot",
     "ModelSnapshot",
+    "OverReversionSignal",
     "PreMatchOverReversionEngine",
     "PreMatchSnapshot",
     "PortfolioState",
@@ -52,6 +56,8 @@ __all__ = [
     "SignalInput",
     "collect_competition_snapshot",
     "detect_line_moves",
+    "detect_over_reversion_signals",
     "load_engine_config",
     "write_line_move_candidates",
+    "write_over_reversion_signals",
 ]

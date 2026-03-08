@@ -6,6 +6,7 @@ from cloudbettrend.line_moves import (
     SnapshotStore,
     collect_competition_snapshot,
     detect_line_moves,
+    detect_over_reversion_signals,
     extract_line_value,
 )
 
@@ -108,4 +109,123 @@ def test_detect_two_tick_ah_move(tmp_path: Path):
     assert candidate.close_line == -0.75
     assert candidate.ticks_moved >= 2.0
     assert candidate.interpretation == "home_strength_up"
+
+
+def test_detect_ou_pre_up_live_revert_signal(tmp_path: Path):
+    db = tmp_path / "signals.db"
+    store = SnapshotStore(db)
+
+    payload_open = {
+        "events": [
+            {
+                "id": 2002,
+                "name": "Gamma vs Delta",
+                "cutoffTime": "2026-03-20T12:00:00Z",
+                "status": "TRADING",
+                "markets": {
+                    "soccer.total_goals": {
+                        "submarkets": {
+                            "period=ft": {
+                                "selections": [
+                                    {
+                                        "outcome": "over",
+                                        "params": "total=2.5",
+                                        "price": 1.95,
+                                        "status": "SELECTION_ENABLED",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    payload_close = {
+        "events": [
+            {
+                "id": 2002,
+                "name": "Gamma vs Delta",
+                "cutoffTime": "2026-03-20T12:00:00Z",
+                "status": "TRADING",
+                "markets": {
+                    "soccer.total_goals": {
+                        "submarkets": {
+                            "period=ft": {
+                                "selections": [
+                                    {
+                                        "outcome": "over",
+                                        "params": "total=3.0",
+                                        "price": 1.93,
+                                        "status": "SELECTION_ENABLED",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    payload_live = {
+        "events": [
+            {
+                "id": 2002,
+                "name": "Gamma vs Delta",
+                "cutoffTime": "2026-03-20T12:00:00Z",
+                "status": "TRADING",
+                "markets": {
+                    "soccer.total_goals": {
+                        "submarkets": {
+                            "period=ft": {
+                                "selections": [
+                                    {
+                                        "outcome": "over",
+                                        "params": "total=2.5",
+                                        "price": 2.02,
+                                        "status": "SELECTION_ENABLED",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        ]
+    }
+    client = _FakeClient(payloads=[payload_open, payload_close, payload_live])
+
+    collect_competition_snapshot(
+        client=client,
+        store=store,
+        competition_key="soccer-test-over",
+        snapshot_time="2026-03-20T10:00:00+00:00",
+    )
+    collect_competition_snapshot(
+        client=client,
+        store=store,
+        competition_key="soccer-test-over",
+        snapshot_time="2026-03-20T11:30:00+00:00",
+    )
+    collect_competition_snapshot(
+        client=client,
+        store=store,
+        competition_key="soccer-test-over",
+        snapshot_time="2026-03-20T12:05:00+00:00",
+    )
+
+    signals = detect_over_reversion_signals(
+        store=store,
+        lookback_hours=100000,
+        min_pre_move_ticks=2.0,
+        min_reversion_ticks=1.0,
+        max_live_minutes=25,
+    )
+    assert len(signals) == 1
+    sig = signals[0]
+    assert sig.market_key == "soccer.total_goals"
+    assert sig.open_line == 2.5
+    assert sig.close_line == 3.0
+    assert sig.live_line == 2.5
+    assert sig.bet_side == "over"
 
